@@ -1,0 +1,1321 @@
+---
+title: Part 2 - CSP Short Course <br> Second-generation p-values (Half-Day) 
+output: 
+  html_document:
+    code_folding: hide
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+    theme: sandstone
+---
+
+# Introduction {-}
+
++ Jeffrey D. Blume, PhD
+    + School of Data Science, University of Virginia
++ Megan H. Murray, PhD 
+    + Project Statistician, Eli Lilly and Company
+    
+Resources:
+
++ GitHub with Slides and Code: [https://github.com/murraymegan/SGPV_CSP_2023](https://github.com/murraymegan/SGPV_CSP_2023)
++ RStudio Desktop: [www.rstudio.com/products/rstudio/download](www.rstudio.com/products/rstudio/download)  
++ Interrupt for questions! 
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(message=FALSE, warning=FALSE, echo=TRUE)
+
+## load all needed packages
+library(sgpv)
+library(ggplot2)
+library(dplyr)
+library(kableExtra)
+library(FDRestimation)
+library(survival)
+library(TOSTER)
+library(latex2exp)
+library(ProSGPV)
+
+## load data
+data(leukstats)
+data(lung)
+```
+
+# SGPV R Package
+
+There are 2 ways to install `sgpv` package. 
+
++ CRAN: `install.packages("sgpv")`
++ GitHub: `devtools::install_github("weltybiostat/sgpv")`
+
+```{r eval=FALSE}
+#GitHub
+install.packages("devtools")
+devtools::install_github("weltybiostat/sgpv")
+
+#CRAN
+install.packages("sgpv")
+```
+
+Functions Included:
+
++ `sgpvalue()`
+    + This function computes the second-generation p-value (SGPV) and its associated delta gaps, as introduced in Blume et al. (2018).
++ `sgpower()`
+    + Calculate power and type I error values from significance testing based on second-generation p-values as the inferential metric.
++ `plotsgpv()`
+    + This function displays user supplied interval estimates (support intervals, confidence intervals, credible intervals, etc.) according to its associated second-generation p-value ranking.
++ `plotman()`
+    + This function displays a modified Manhattan-style plot colored according to second-generation p-value status.
++ `fdrisk()`
+    + This function computes the false discovery risk (sometimes called the "empirical bayes FDR") for a second-generation p-value of 0, or the false confirmation risk for a second-generation p-value of 1.
+
+# Part 2
+
+## Statistical Properties
+
+3 inference outcomes:
+
++ Data are consistent with null $p_\delta=1$
++ Data are consistent with alternative $p_\delta=0$
++ Data are inconclusive $0<p_\delta<1$
+
+2 underlying truths:
+
++ Null is true
++ Alternative is true
+
+### CIs can miss (bummer) 
+
+```{r}
+cidemo = function(rep=100,
+                  mu=0.8,
+                  n=200,
+                  alpha=0.05,
+                  ylb="Probability",
+                  ltype=1,
+                  lcol=4,
+                  ltype1=1,
+                  lwd1=2,
+                  lcol1=2,
+                  plotset=F,
+                  hilim=1,
+                  lolim=0.5,
+                  bcol="lemonchiffon2",
+                  xleg=45,
+                  yleg=0.65,
+                  idz.lo=0.75,
+                  idz.hi=0.85,
+                  zone=TRUE){
+
+  cints=matrix(0,3,rep)
+  
+  cints[1,]=seq(1,rep,1)
+  sigma=sqrt(mu*(1-mu))
+  
+  for (i in 1:rep) {
+  
+  dat=rbinom(n,1,prob=mu)
+  
+  ## Standard normal quantile
+  za=abs(qnorm(alpha/2))
+  
+  ## upper CI limit
+  cints[2,i]=mean(dat)+za*sigma/sqrt(n) 
+  
+  ## Lower CI limit
+  cints[3,i]=mean(dat)-za*sigma/sqrt(n)
+  }
+  
+  if (plotset==T){
+    lolim=mu-5*sigma/sqrt(n)
+    hilim=mu+5*sigma/sqrt(n)
+  }
+  
+  if (sigma!=1){
+    plot(cints[1,],cints[2,],ylim=c(lolim,hilim),type="n",
+    main=paste("95% Confidence Intervals for the Probability\n Sample Size of ",n," per Endpoint"),
+    ylab=ylb,xlab="Replication")
+	}
+  	
+  if (sigma==1){
+  	plot(cints[1,],cints[2,],ylim=c(lolim,hilim),type="n",
+  	main=paste("95% Confidence Intervals on the Standardized Effect Size \n Sample Size of ",n," per Endpoint"),
+  	ylab="Standardized Effect Size (X/sigma units)",xlab="Endpoint Identification Number")
+  	}
+
+  if (zone==TRUE) {			
+    polygon(c(0,rep,rep,0),c(idz.hi,idz.hi,idz.lo,idz.lo),density=200,col=bcol)
+  }
+  			
+  abline(h=mu)
+  points(cints[1,],cints[2,],cex=0.6,pch=16,col=lcol)
+  points(cints[1,],cints[3,],cex=0.6,pch=16,col=lcol)
+  segments(cints[1,], cints[2,], cints[1,], cints[3,],lty=ltype,col=lcol)
+  
+  ct=0
+  ct2=0
+  for (i in 1:rep) {
+  
+    if (cints[2,i]<mu | cints[3,i]>mu){
+    	segments(cints[1,i], cints[2,i], 
+    	         cints[1,i],cints[3,i],
+    	         lty=ltype1,col=lcol1,lwd=lwd1) 
+    	points(cints[1,i],cints[2,i],cex=0.6,pch=16,col=lcol1)
+    	points(cints[1,i],cints[3,i],cex=0.6,pch=16,col=lcol1)
+    	ct=ct+1}
+    	
+    if (cints[2,i]<idz.lo | cints[3,i]>idz.hi){
+      ct2=ct2+1
+    }
+  }
+  
+  if (rep>100){
+    abline(h=idz.hi,col=bcol,lty=2,lwd=1.5)
+    abline(h=idz.lo,col=bcol,lty=2,lwd=1.5)
+  }
+  
+  ## prob of missing indifference zone
+  ## P(CI upper limit<idz.lo) +P(CI lower limit>idz.hi) 
+  miss.idz=pnorm(-za+idz.lo*sqrt(n)/sigma)+pnorm(-za-idz.hi*sqrt(n)/sigma)
+  
+  if (zone==TRUE){
+    legend(xleg,yleg,bty="n",
+    c(paste("Missed True Value:             ",ct," / ",rep,sep=""),
+    paste("Missed Indifference Zone:   ",ct2," / ",rep,sep="")))
+  }
+    
+  if (zone!=TRUE){
+    legend(xleg,yleg,bty="n",
+    c(paste("Missed True Value:             ",
+            ct," / ",rep,sep="")))
+  }
+  
+}
+
+set.seed(999)
+
+cidemo(n=75,zone=FALSE)
+cidemo(n=75,zone=FALSE)
+cidemo(n=400,zone=FALSE)
+cidemo(n=400,zone=FALSE)
+
+cidemo(n=75)
+cidemo(n=75)
+cidemo(n=400)
+cidemo(n=400)
+```
+
+```{r alt}
+prob.alt.sg = function(n, null.delta, 
+                    theta0=0, 
+                    theta=0,  
+                    V=1, 
+                    alpha=0.05){
+  results = rep(NA, length(n))
+  
+  results = pnorm(sqrt(n)*(theta0-null.delta)/sqrt(V)-sqrt(n)*theta/sqrt(V)-qnorm(1-alpha/2))+
+    pnorm(-1*sqrt(n)*(theta0+null.delta)/sqrt(V)+sqrt(n)*theta/sqrt(V)-qnorm(1-alpha/2))
+  
+  results
+}
+```
+
+### Errors and Plots {-}
+
+```{r null}
+prob.null.sg = function(n, 
+                        null.delta, 
+                     theta0=0, 
+                     theta=0,
+                     V=1, 
+                     alpha=0.05){
+  results = rep(NA, length(n))
+  
+  if(length(null.delta)>1){
+    con.large = which(null.delta>(qnorm(1-alpha/2)*sqrt(V)/sqrt(n)))
+    con.small = which(null.delta<=(qnorm(1-alpha/2)*sqrt(V)/sqrt(n)))
+    
+    results[con.small] = rep(0, length(con.small))
+    results[con.large] =
+      pnorm(sqrt(n[con.large])*theta0+sqrt(n[con.large])*null.delta[con.large]/sqrt(V)-sqrt(n[con.large])*theta/sqrt(V)-qnorm(1-alpha/2))-
+      pnorm(sqrt(n[con.large])*theta0-sqrt(n[con.large])*null.delta[con.large]/sqrt(V)-sqrt(n[con.large])*theta/sqrt(V)+qnorm(1-alpha/2))
+  }else if(null.delta>(qnorm(1-alpha/2)*sqrt(V)/sqrt(n))){ 
+    results =
+      pnorm(sqrt(n)*theta0+sqrt(n)*null.delta/sqrt(V)-sqrt(n)*theta/sqrt(V)-qnorm(1-alpha/2))-
+      pnorm(sqrt(n)*theta0-sqrt(n)*null.delta/sqrt(V)-sqrt(n)*theta/sqrt(V)+qnorm(1-alpha/2))
+  }else{
+    results = rep(0, length(theta))
+  }
+  results
+}
+```
+
+```{r incon}
+prob.incon.sg = function(n, null.delta, 
+                    theta0=0, 
+                    theta=0,  
+                    V=1,
+                    alpha=0.05){
+  results = rep(NA, length(n))
+  
+  con.large = which(null.delta>(qnorm(1-alpha/2)*sqrt(V)/sqrt(n)))
+  con.small = which(null.delta<=(qnorm(1-alpha/2)*sqrt(V)/sqrt(n)))
+  
+  results = 1-(prob.alt.sg(n, null.delta,
+                        theta0, 
+                        theta, 
+                        V,
+                        alpha)+
+                 prob.null.sg(n, null.delta,
+                           theta0, 
+                           theta,
+                           V, 
+                           alpha))
+  
+  results
+}
+```
+
+```{r}
+theta.1 = seq(-3,3,by=0.01)
+
+plot(theta.1, prob.alt.sg(n=50,
+            null.delta = 0,
+            theta=theta.1), type="l",
+     ylim=c(0,1),
+     xlab="Alternative",
+     ylab="Probability",
+     main="Prob of being consistent with alternative")
+lines(theta.1, prob.alt.sg(n=50,
+            null.delta = 0.5,
+            theta=theta.1),
+      col="green")
+lines(theta.1, prob.alt.sg(n=50,
+            null.delta = 1,
+            theta=theta.1),
+      col="blue")
+abline(h=0.05, lty=2)
+legend("bottomright",
+       legend=c("Delta=0", "Delta=0.5", "Delta=1"),
+       col=c("black", "green","blue"), lty=1)
+
+```
+
+```{r}
+theta.1 = seq(-3,3,by=0.01)
+
+plot(theta.1, prob.null.sg(n=50,
+            null.delta = 0,
+            theta=theta.1), type="l",
+     ylim=c(0,1),
+     xlab="Alternative",
+     ylab="Probability",
+     main="Prob of being consistent with null")
+lines(theta.1, prob.null.sg(n=50,
+            null.delta = 0.5,
+            theta=theta.1),
+      col="green")
+lines(theta.1, prob.null.sg(n=50,
+            null.delta = 1,
+            theta=theta.1),
+      col="blue")
+abline(h=0.05, lty=2)
+legend("bottomright",
+       legend=c("Delta=0", "Delta=0.5", "Delta=1"),
+       col=c("black", "green","blue"), lty=1)
+```
+
+```{r}
+theta.1 = seq(-3,3,by=0.01)
+
+plot(theta.1, prob.incon.sg(n=50,
+            null.delta = 0,
+            theta=theta.1), type="l",
+     ylim=c(0,1),
+     xlab="Alternative",
+     ylab="Probability",
+     main="Prob of being inconclusive")
+lines(theta.1, prob.incon.sg(n=50,
+            null.delta = 0.5,
+            theta=theta.1),
+      col="green")
+lines(theta.1, prob.incon.sg(n=50,
+            null.delta = 1,
+            theta=theta.1),
+      col="blue")
+abline(h=0.05, lty=2)
+legend("bottomright",
+       legend=c("Delta=0", "Delta=0.5", "Delta=1"),
+       col=c("black", "green","blue"), lty=1)
+```
+
+## SGPV False Discovery Risk
+
++ False Discovery Rate (FDR)
+    + SGPV = 0
++ False Confirmation Rate (FCR)
+    + SGPV = 1
+
++ `sgpv::fdrisk()` 
+    + This function computes the false discovery risk (sometimes called the "empirical bayes FDR") for a second-generation p-value of 0, or the false confirmation risk for a second-generation p-value of 1.
+
+```{r}
+###### FDR rates
+# false discovery risk with 95% confidence level
+fdrisk(sgpval = 0,  
+       null.lo = log(1/1.1), 
+       null.hi = log(1.1),  
+       std.err = 0.8,  
+       null.weights = 'Uniform',  
+       null.space = c(log(1/1.1), log(1.1)),  
+       alt.weights = 'Uniform',  
+       alt.space = 2 + c(-1,1)*qnorm(1-0.05/2)*0.8,  
+       interval.type = 'confidence',  
+       interval.level = 0.05)
+
+## with truncated normal weighting distribution
+fdrisk(sgpval = 0,  
+       null.lo = log(1/1.1), 
+       null.hi = log(1.1),  
+       std.err = 0.8,  
+       null.weights = 'Point', 
+       null.space = 0,  
+       alt.weights = 'TruncNormal',  
+       alt.space = 2 + c(-1,1)*qnorm(1-0.041/2)*0.8,  
+       interval.type = 'likelihood',  interval.level = 1/8)
+
+# false discovery risk with LSI and wider null hypothesis
+fdrisk(sgpval = 0,  
+       null.lo = log(1/1.5), 
+       null.hi = log(1.5), 
+       std.err = 0.8,  
+       null.weights = 'Point', 
+       null.space = 0,  
+       alt.weights = 'Uniform', 
+       alt.space = 2.5 + c(-1,1)*qnorm(1-0.041/2)*0.8,  
+       interval.type = 'likelihood',  
+       interval.level = 1/8)
+
+# false confirmation risk example
+fdrisk(sgpval = 1,  
+       null.lo = log(1/1.5), 
+       null.hi = log(1.5), 
+       std.err = 0.15,  
+       null.weights = 'Uniform',  
+       null.space = 0.01 + c(-1,1)*qnorm(1-0.041/2)*0.15, 
+       alt.weights = 'Uniform', 
+       alt.space = c(log(1.5), 1.25*log(1.5)), 
+       interval.type = 'likelihood',  
+       interval.level = 1/8)
+
+###
+##
+#
+```
+
+False Discovery and Confirmation Rates
+
+```{r}
+power.pv=function(n=20,sd=1,alpha=0.05,mu.l=-3,mu.u=3,delta=0.3,mu.0=0,r=1){
+
+  ## Computes power when delta is zero and non-zero
+  ## Inputs:
+  ## n is sample size 
+  ## indifference zone is: mu.0 +/- delta
+  ## alternative space is: mu in [mu.l, mu.u]
+  ## data ~ N(mu,sd)
+  ## r = P(H1)/P(H0) for simple H1 and H0
+  
+  mu=seq(mu.l,mu.u,0.01)
+  
+  ## Power (null is mu.0 ; alt is mu)
+  pow1.d=pnorm(-sqrt(n)*(delta-(mu.0-mu))/sd-qnorm(1-alpha/2))
+  pow2.d=pnorm(-sqrt(n)*(delta+(mu.0-mu))/sd-qnorm(1-alpha/2))
+  power.d=pow1.d+pow2.d
+  
+  ## Power without indifference zone (delta=0)
+  pow1.0=pnorm(-sqrt(n)*(0-(mu.0-mu))/sd-qnorm(1-alpha/2))
+  pow2.0=pnorm(-sqrt(n)*(0+(mu.0-mu))/sd-qnorm(1-alpha/2))
+  power.0=pow1.0+pow2.0
+  
+  ## Type I error (null is mu.0 ; alt is mu.0)
+  alpha.d=2*pnorm(-sqrt(n)*(delta)/sd-qnorm(1-alpha/2))
+  
+  ## Type I error without indifference zone (delta=0)
+  alpha.0=2*pnorm(-sqrt(n)*(0)/sd-qnorm(1-alpha/2))
+  
+  ## P(sgpv=1|H0) not quite alpha b/c rules out inconclusive
+  gam1.0=pnorm(sqrt(n)*(delta)/sd-qnorm(1-alpha/2))
+  gam2.0=pnorm(sqrt(n)*(-delta)/sd+qnorm(1-alpha/2))
+  gam.0=(gam1.0-gam2.0)*(delta>qnorm(1-alpha/2)*sd/sqrt(n))
+  
+  ##
+  gam1.a=pnorm(sqrt(n)*(delta+mu.0-mu)/sd-qnorm(1-alpha/2))
+  gam2.a=pnorm(sqrt(n)*(mu.0-delta-mu)/sd+qnorm(1-alpha/2))
+  gam.a=(gam1.a-gam2.a)*(delta>qnorm(1-alpha/2)*sd/sqrt(n))
+  
+  ## False discovery rates (fdr1=FDR ; fdr0=FNDR)
+  fdr.d = 1 / (1 + power.d/alpha.d * r)
+  fndr.0 = 1 / (1 + (1-alpha.0)/(1-power.0) * (1/r))
+  
+  fdr.0 = 1 / (1 + power.0/alpha.0 * r)
+  fndr.d = 1 / (1 + gam.0/gam.a * (1/r))
+  
+  ret=cbind(mu,alpha.d,power.d,fdr.d,fndr.d,
+	  			alpha.0,power.0,fdr.0,fndr.0,gam.0,gam.a)
+  colnames(ret)=c('mu','alpha.d','power.d','fdr.d','fndr.d',
+  						'alpha.0','power.0','fdr.0','fndr.0',
+							'gam.0','gam.a')
+  ret
+}
+```
+
+```{r, fig.height=6, fig.width=8}
+par(mfrow=c(1,1))
+prev.ratio=1
+set.delta=0.5
+set.n=16
+
+all=power.pv(delta=set.delta,n=set.n,r=prev.ratio,alpha=0.05)
+
+plot(all[,'mu'],all[,'fdr.0'],type="n",ylab="Probability",xlab="Alternative in SD units",
+     ylim=c(0,prev.ratio/(prev.ratio+1)),xlim=c(-3,3))
+title(main="False discovery and confirmation rates")
+
+lines(all[,'mu'],all[,'fdr.0'],col="firebrick",lwd=1,lty=2)
+lines(all[,'mu'],all[,'fndr.0'],col="dodgerblue",lwd=1,lty=2)
+
+lines(all[,'mu'],all[,'fdr.d'],col="firebrick",lwd=2)
+lines(all[,'mu'],all[,'fndr.d'],col="dodgerblue",lwd=2)
+
+legend("topleft",c("",
+                   expression(paste("P-value < ",0.05,sep="")),
+                   expression(paste(P[delta]," = 0",sep="")),
+                   "", "",
+                   expression(paste("P-value > ",0.05,sep="")),
+                   expression(paste(P[delta]," = 1",sep=""))),
+       col=c("","firebrick","firebrick","","",
+             "dodgerblue","dodgerblue"),
+       lty=c(NA,2,1,NA,NA,2,1),lwd=c(NA,1,2,NA,NA,1,2),bty="n")
+
+text(-2.875,0.5,"FDR")
+text(-2.875,0.42,"FCR")
+
+axis(side = 1, at = c(-set.delta,set.delta),cex.axis=0.8,col.ticks="black",lwd.ticks=1.5,tcl=0.6,labels=FALSE)
+axis(side = 3, at = c(-set.delta,set.delta),cex.axis=0.8,col.ticks="black",lwd.ticks=1.5,tcl=0.6,labels=FALSE)
+
+text(0,-0.0125,expression(paste(H[0]," Zone",sep="")),cex=0.8)
+text(0,prev.ratio/(prev.ratio+1)*1.015,expression(paste(H[0]," Zone",sep="")),cex=0.8)
+
+text(2.5,0.05/(prev.ratio+0.05)+.01,"alpha/(alpha+r)")
+```
+
+## Study Planning
+
+Purpose: Evaluate how different techniques of setting the indifference zone effect the SGPV study properties. 
+
+What options does a collaborator have when they are uncertain of the indifference zone? 
+
+### Fixed Intervals {-}
+
+```{r}
+n= seq(1,250, by=0.1)
+V=1
+alpha=0.05
+
+null.delta0 = rep(0.5, length(n))
+null.delta1 = rep(0, length(n))
+null.delta2 = rep(1.25, length(n))
+null.delta3 = rep(1, length(n))
+null.delta4 = rep(0.75, length(n))
+null.delta5 = rep(0.25, length(n))
+
+ci.bound = qnorm(1-alpha/2)*sqrt(V)/sqrt(n)
+```
+
+```{r fig.height=5, fig.width=6, message=FALSE, warning=FALSE}
+plot(n, null.delta1, 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,3),
+     ylab=TeX(r'(Half Interval Width $ (\delta)$)'),
+     xlab = "Sample Size (n)",
+     main="")
+lines(n, null.delta2,
+      col="blue",
+      lwd=2)
+lines(n, null.delta3,
+      col="purple",
+      lwd=2)
+lines(n, null.delta4,
+      col="darkgreen",
+      lwd=2)
+lines(n, null.delta5,
+      col="orange",
+      lwd=2)
+lines(n, null.delta0,
+      col="hotpink",
+      lwd=2)
+lines(n, ci.bound,
+      col="black",
+      lty=2,
+      lwd=2)
+# abline(h=0.05, col="black", lty=2)
+legend(130, 
+       3,
+        col=c("black",
+             "red",
+             "blue",
+             "purple",
+             "darkgreen",
+             "hotpink",
+             "orange"),
+       box.lty=0,
+       lty=c(2,
+             1,
+             1,
+             1,
+             1,
+             1,
+             1),
+       cex=0.65,
+       lwd=2,
+       legend=c(TeX(r'(Uncertainty Interval $\left(\sqrt{1/n}\right)$)'),
+                "Point Null: Constant at 0",
+                "SGPV: Constant at 1.25", 
+                "SGPV: Constant at 1",
+                "SGPV: Constant at 0.75",
+                "SGPV: Constant at 0.5",
+                "SGPV: Constant at 0.25"))
+
+```
+
+```{r fig.width=8, fig.height=4}
+par(mfrow=c(1,2))
+par(mar=c(2,2,2,2))
+
+plot(n, prob.alt.sg(n, null.delta1,
+                  theta=0), 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,0.055),
+     ylab="", 
+     main=TeX(r'(Type 1 Error $\beta_0$)'))
+lines(n, prob.alt.sg(n, null.delta2,
+                  theta=0),
+      col="blue",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta3,
+                  theta=0),
+      col="purple",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta4,
+                  theta=0),
+      col="darkgreen",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta5,
+                  theta=0),
+      col="orange",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta0,
+                  theta=0),
+      col="hotpink",
+      lwd=2)
+abline(h=0.05, col="black", lty=2)
+
+plot(n, prob.alt.sg(n, null.delta1,
+                  theta=1), 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,1),
+     ylab="", 
+     main=TeX(r'(Power $\beta_1$)'))
+lines(n, prob.alt.sg(n, null.delta2,
+                  theta=1),
+      col="blue",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta3,
+                  theta=1),
+      col="purple",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta4,
+                  theta=1),
+      col="darkgreen",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta5,
+                  theta=1),
+      col="orange",
+      lwd=2)
+lines(n, prob.alt.sg(n, null.delta0,
+                  theta=1),
+      col="hotpink",
+      lwd=2)
+legend(70, 0.5,
+       col=c("red",
+             "blue",
+             "purple",
+             "darkgreen",
+             "hotpink",
+             "orange"),
+       box.lty=0,
+       lty=c(1,
+             1,
+             1,
+             1,
+             1,
+             1),
+       cex=0.7,
+       lwd=2,
+       legend=c("Point Null: Constant at 0",
+                "SGPV: Constant at 1.25", 
+                "SGPV: Constant at 1",
+                "SGPV: Constant at 0.75",
+                "SGPV: Constant at 0.5",
+                "SGPV: Constant at 0.25"))
+```
+
+```{r fig.width=6, fig.height=4}
+par(mfrow=c(1,1))
+par(mar=c(4,4,2,2))
+
+plot(n, prob.null.sg(n, null.delta1,
+                  theta=0)+prob.alt.sg(n, null.delta1,
+                  theta=1), 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,2),
+     ylab=TeX(r'( $\beta_1$ + $\omega_0$)'), 
+     main= TeX(r'(Sum of Power and Probability of Null ($\beta_1$ +$\omega_0$))'))
+lines(n, prob.null.sg(n, null.delta2,
+                  theta=0)+prob.alt.sg(n, null.delta2,
+                  theta=1),
+      col="blue",
+      lwd=2)
+# lines(n, prob.null.sg(n, null.delta3,
+#                   theta=0),
+#       col="purple",
+#       lwd=2)
+lines(n, prob.null.sg(n, null.delta4,
+                  theta=0)+prob.alt.sg(n, null.delta4,
+                  theta=1),
+      col="darkgreen",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta5,
+                  theta=0)+prob.alt.sg(n, null.delta5,
+                  theta=1),
+      col="orange",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta0,
+                  theta=0)+prob.alt.sg(n, null.delta0,
+                  theta=1),
+      col="hotpink",
+      lwd=2)
+legend(172, 0.7,
+       col=c("red",
+             "blue",
+             "purple",
+             "darkgreen",
+             "hotpink",
+             "orange"),
+       box.lty=0,
+       lty=c(1,
+             1,
+             1,
+             1,
+             1,
+             1,
+             2,
+             2,
+             2,
+             2,
+             2,
+             2),
+       cex=0.7,
+       lwd=2,
+       legend=c(TeX(r'( Constant at 0)'),
+                TeX(r'(Constant at 1.25)'), 
+                 TeX(r'( Constant at 1)'), 
+                 TeX(r'( Constant at 0.75)'), 
+                 TeX(r'(Constant at 0.5)'), 
+                 TeX(r'( Constant at 0.25)')))
+```
+
+```{r fig.width=8, fig.height=4}
+par(mfrow=c(1,2))
+par(mar=c(2,2,4,2))
+
+plot(n, prob.null.sg(n, null.delta1,
+                  theta=0), 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,1),
+     ylab="", 
+     main= TeX(r'(Probability of Null $\omega_0$)'))
+lines(n, prob.null.sg(n, null.delta2,
+                  theta=0),
+      col="blue",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta3,
+                  theta=0),
+      col="purple",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta4,
+                  theta=0),
+      col="darkgreen",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta5,
+                  theta=0),
+      col="orange",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta0,
+                  theta=0),
+      col="hotpink",
+      lwd=2)
+
+plot(n, prob.null.sg(n, null.delta1,
+                  theta=1), 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,1),
+     ylab="", 
+     main=TeX(r'(Probability of Null $\omega_1$)'))
+lines(n, prob.null.sg(n, null.delta2,
+                  theta=1),
+      col="blue",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta3,
+                  theta=1),
+      col="purple",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta4,
+                  theta=1),
+      col="darkgreen",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta5,
+                  theta=1),
+      col="orange",
+      lwd=2)
+lines(n, prob.null.sg(n, null.delta0,
+                  theta=1),
+      col="hotpink",
+      lwd=2)
+legend(70, 0.5,
+       col=c("red",
+             "blue",
+             "purple",
+             "darkgreen",
+             "hotpink",
+             "orange"),
+       box.lty=0,
+       lty=c(1,
+             1,
+             1,
+             1,
+             1,
+             1),
+       cex=0.7,
+       lwd=2,
+       legend=c("Point Null: Constant at 0",
+                "SGPV: Constant at 1.25", 
+                "SGPV: Constant at 1",
+                "SGPV: Constant at 0.75",
+                "SGPV: Constant at 0.5",
+                "SGPV: Constant at 0.25"))
+```
+
+```{r fig.width=8, fig.height=4}
+par(mfrow=c(1,2))
+par(mar=c(2,2,4,2))
+
+plot(n,prob.incon.sg(n, null.delta1,
+                  theta=0), 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,1),
+     ylab="", 
+     main=TeX(r'(Probability of Inconclusive $\gamma_0$)'))
+lines(n,prob.incon.sg(n, null.delta2,
+                  theta=0),
+      col="blue",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta3,
+                  theta=0),
+      col="purple",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta4,
+                  theta=0),
+      col="darkgreen",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta5,
+                  theta=0),
+      col="orange",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta0,
+                  theta=0),
+      col="hotpink",
+      lwd=2)
+
+plot(n,prob.incon.sg(n, null.delta1,
+                  theta=1), 
+     type="l",
+     col="red",
+     lwd=2,
+     ylim=c(0,1),
+     ylab="", 
+     main=TeX(r'(Probability of Inconclusive $\gamma_1$)'))
+lines(n,prob.incon.sg(n, null.delta2,
+                  theta=1),
+      col="blue",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta3,
+                  theta=1),
+      col="purple",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta4,
+                  theta=1),
+      col="darkgreen",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta5,
+                  theta=1),
+      col="orange",
+      lwd=2)
+lines(n,prob.incon.sg(n, null.delta0,
+                  theta=1),
+      col="hotpink",
+      lwd=2)
+legend(90, 0.8,
+       col=c("red",
+             "blue",
+             "purple",
+             "darkgreen",
+             "hotpink",
+             "orange"),
+       box.lty=0,
+       lty=c(1,
+             1,
+             1,
+             1,
+             1,
+             1),
+       cex=0.7,
+       lwd=2,
+       legend=c("Point Null: Constant at 0",
+                "SGPV: Constant at 1.25", 
+                "SGPV: Constant at 1",
+                "SGPV: Constant at 0.75",
+                "SGPV: Constant at 0.5",
+                "SGPV: Constant at 0.25"))
+```
+
+### Shrinking from 0.9 to 0.45 {-}
+
+Let's see how these look on a plot:
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+n= seq(1,250, by=0.1)
+V=1
+k=0.9
+alpha.set=0.05
+  
+null.delta0 = rep(k, length(n))
+null.delta1 = rep(0, length(n))
+null.delta2 = (k-(k/2))*sqrt(V)/n^(1/4)+(k/2)
+null.delta4 = (k-(k/2))*sqrt(V)/n^(1/3)+(k/2)
+null.delta5 = (k-(k/2))*sqrt(V)/n^(1/2)+(k/2)
+
+ci.bound = qnorm(1-alpha.set/2)*sqrt(V)/sqrt(n)
+```
+
+```{r fig.height=8, fig.width=9, message=FALSE, warning=FALSE}
+n2= seq(-10,300, by=0.1)
+  
+plot(n, ci.bound, 
+     type="n",
+     col="black",
+     lty=2,
+     lwd=2,
+     ylim=c(-2,2.2),
+     xlim=c(0,225),
+     ylab="",
+     xlab = "Sample Size (n)",
+     main="",
+     yaxt = "n")
+# lines(n, -1*ci.bound,
+#       col="black",
+#       lty=2,
+#       lwd=2)
+lines(n, null.delta2,
+      col="blue",
+      lwd=2)
+lines(n, -1*null.delta2,
+      col="blue",
+      lwd=2)
+lines(n, null.delta4,
+      col="hotpink",
+      lwd=2)
+lines(n, -1*null.delta4,
+      col="hotpink",
+      lwd=2)
+lines(n, null.delta5,
+      col="orange",
+      lwd=2)
+lines(n, -1*null.delta5,
+      col="orange",
+      lwd=2)
+abline(h=k, col="black", lty=1,lwd=2)
+abline(h=-1*k, col="black", lty=1,lwd=2)
+abline(h=0, col="red", lty=1,lwd=2)
+abline(h=1, col="red", lty=2,lwd=2)
+polygon(c(n2, rev(n2)), c(rep(-1*k, length(n2)), rev(rep(-1*(k/2), length(n2)))),
+        border = NA,
+        col = rgb(210/633,210/633,210/633, alpha = 0.2))
+polygon(c(n2, rev(n2)), c(rep((k/2), length(n2)), rev(rep(k, length(n2)))),
+        border = NA,
+        col = rgb(210/633,210/633,210/633, alpha = 0.2))
+axis(2, at = c(-2,-1,-0.9,-0.45,0,
+               2,1,0.9,0.45),
+     labels = c(-2,-1,-0.9,-0.45,TeX(r'($\theta_0=0$)'),
+               2,TeX(r'($\theta_1=1$)'),0.9,0.45),
+     las=1)
+legend(135, 
+       2.25,
+       col=c("red",
+             "red",
+             "black",
+             "blue",
+             "hotpink",
+             "orange"),
+       box.lty=0,
+       lty=c(1,
+             2,
+             1,
+             1,
+             1,
+             1),
+       cex=0.9,
+       lwd=2,
+       legend=c(TeX(r'(Null Hypothesis $\theta_0=0$)'),
+                TeX(r'(Alternative Hypothesis $\theta_1=1$)'),
+                "Original SGPV: Constant at 0.9", 
+                TeX(r'($delta_1(n)\propto n^{-1/4}$)'),
+                TeX(r'($delta_2(n)\propto n^{-1/3}$)'),
+                 TeX(r'($delta_3(n)\propto n^{-1/2}$)')))
+
+```
+
+## Equivalence tests: TOST
+
++ Establish bioequivalence between data and an established range
++ Example: A pharmaceutical company tests for drug approval by comparing new drug’s performance to an approved drug’s performance
++ Tests are ordinary, one-sided, α-level t-tests
++ Flips the null and alternative hypotheses
+
+```{r}
+n=6
+dat = rnorm(n, 0, 1)
+a = t.test(dat)$conf.int[1]
+b =  t.test(dat)$conf.int[2]
+  
+x_bar = mean(dat)
+S = sd(dat)
+Z = (b-x_bar)/(S/sqrt(n))
+  
+theta_p = 0.5*0.75
+theta_m = -0.5*0.75
+  
+out_TOST = tsum_TOST(m1=x_bar, 
+            mu=0,       
+            sd1=S, 
+            n1=n, 
+            low_eqbound=theta_m, 
+            high_eqbound=theta_p, 
+            alpha=0.05,
+            eqbound_type = "raw")
+
+out_TOST$TOST
+
+max(out_TOST$TOST$p.value[2], out_TOST$TOST$p.value[3])
+  
+out_sgpv = sgpvalue(est.lo=a, 
+                       est.hi=b, 
+                       null.lo=theta_m, 
+                       null.hi=theta_p)
+
+out_sgpv 
+```
+
+```{r message=FALSE, warning=FALSE}
+set.seed(999)
+iter=500
+n=6
+results = as.data.frame(matrix(ncol=3, nrow=iter))
+colnames(results) = c("sgpv", "tost", "Case")
+half.case = NULL
+half.case2 = NULL
+
+for(i in 1:iter){
+  dat = rnorm(n, 0, 1)
+  a = t.test(dat)$conf.int[1]
+  b =  t.test(dat)$conf.int[2]
+  x_bar = mean(dat)
+  S = sd(dat)
+  Z = (b-x_bar)/(S/sqrt(n))
+  
+  theta_p = 0.5*0.75
+  theta_m = -0.5*0.75
+  
+  out_TOST = tsum_TOST(m1=x_bar, 
+            mu=0,       
+            sd1=S, 
+            n1=n, 
+            low_eqbound=theta_m, 
+            high_eqbound=theta_p, 
+            alpha=0.05,
+            eqbound_type = "raw")
+  
+  out_sgpv = sgpvalue(est.lo=a, 
+                       est.hi=b, 
+                       null.lo=theta_m, 
+                       null.hi=theta_p)$p.delta
+  
+  results[i,1] = out_sgpv 
+  results[i,2] = pmax(out_TOST$TOST$p.value[2],out_TOST$TOST$p.value[3]) 
+  
+  if(theta_m<a & theta_p>a & theta_p<b){
+    # Case 4 some overlap
+    results[i,3] = "\n Case 4: \nPartial Overlap"
+  }else if(theta_m<b & theta_p>b & theta_m>a){
+    # Case 3 some overlap
+    results[i,3] = "\n Case 3: \nPartial Overlap"
+  }else if(theta_m>b | theta_p<a){
+    # Case 1 no overlap
+    results[i,3] = "\n Case 1: \nNo Overlap"
+  }else if((theta_m>a & theta_p<b)|(theta_m<=a & theta_p>=b)){
+    # Case 2 complete overlap
+    results[i,3] = "\n Case 2: \nComplete Overlap"
+  }
+}
+
+
+library(ggplot2)
+scaleFUN <- function(x) sprintf("%.1f", x)
+
+g = ggplot(results, aes(sgpv, tost))+
+  xlab("SGPVs") +
+  ylab("Equivalence p-values") +
+  geom_point(aes(alpha=0.2)) +
+  geom_abline(intercept = 1, slope = -1,linetype='dashed', alpha=0.6)+
+  xlim(c(0,1))+
+  scale_x_continuous(breaks= c( 0,0.120001,0.880001,1),labels=c("0", "~0.1", "~0.9", "1"), minor_breaks = c(0.12,0.88),
+                      sec.axis=sec_axis(~./1, name="",breaks= c( 0.04,0.51,0.98), labels=c("Consistent \n with Alternative", "\n Inconclusive", "Consistent \n with Null")))+ 
+  scale_y_continuous(breaks= c(0,0.07,1),  labels=c("0", expression(alpha), "1"),minor_breaks = c(0.070001),
+                     sec.axis=sec_axis(~./1, name="", breaks= c(0.005,0.61), labels=c("Consistent \n with Null","Inconclusive")))+
+  annotate(geom="text", x=0, y=0.9, label="D",
+              size=5,
+           family = "Courier-Bold")+
+  annotate(geom="text", x=0.85, y=0.98, label="E",
+              size=5,
+           family = "Courier-Bold")+
+  annotate(geom="text", x=0.91, y=0.98, label="F",
+              size=5,
+           family = "Courier-Bold")+
+  annotate(geom="text", x=0, y=0, label="H",
+              size=5,
+           family = "Courier-Bold")+
+  annotate(geom="text", x=0.15, y=0, label="I",
+              size=5,
+           family = "Courier-Bold")+
+  annotate(geom="text", x=0.91, y=0, label="J",
+              size=5,
+           family = "Courier-Bold")+
+  theme_bw()+
+  theme(axis.text.y =  element_text(size=10, hjust=-0.5),
+        axis.text.y.right =  element_text(size=10, hjust=0.7),
+         axis.text.x.top =  element_text(size=10, vjust=2),
+        axis.text.x =  element_text(size=10, vjust=-0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_line(size = 0.8,colour="darkgrey"))+ 
+    guides(alpha=FALSE)
+g
+```
+
+```{r fig4, message=FALSE, warning=FALSE, fig.width=6,fig.height=3}
+ggplot(results, aes(sgpv, tost, col=Case, pch=Case))+
+  geom_point(aes(), cex=1.5) +
+  # geom_jitter(width = 0.02, height = 0.02)+
+  # ggtitle(paste0("Derived Sample Size= ",n," Iterations= ", iter))+
+  xlab("SGPV") +
+  ylab("TOST Eq PV") +
+  # facet_wrap(~ Case) +
+  geom_abline(intercept = 1, slope = -1,linetype='dashed', alpha=0.6)+
+  scale_color_manual(values=c("#0000B9",
+                              "#00A300",
+                              "#FD49A0",
+                              "#FFA500",
+                              "black"))+
+  scale_shape_manual(values=c(16,21,17,24,21))+
+    guides(alpha=FALSE)+
+  scale_y_continuous(labels=scaleFUN)+ 
+  scale_x_continuous(labels=scaleFUN)+
+  guides(color = guide_legend(byrow = TRUE))+
+   theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.spacing.y = unit(0.3, 'cm'))
+```
+
+
+## SGPV Variable Selection 
+
+### ProSGPV Simulation
+
++ We first present an example by applying the ProSGPV algorithm to a simulated dataset by use of gen.sim.data function.
+
++ With sample size n = 100, number of variables p = 10, number of true signals s = 4, smallest effect size $\beta_{min}$ = 1, largest effect size $\beta_{max}$ = 5, autoregressive correlation ρ = 0.2 and variance σ2 = 1, signal-to-noise ratio (SNR) $\nu$= 2.
+
++ We generate outcomes Y following Gaussian distribution. `gen.sim.data` outputs X, Y, indices of true signals, and a vector of true coefficients.
+
+```{r}
+set.seed(1)
+sim.data <- gen.sim.data(n = 50, p = 10, s = 4,
+                         family = "gaussian",
+                         beta.min = 1, beta.max = 5,
+                         rho = 0.2, nu = 2)
+x <- sim.data[[1]]
+y <- sim.data[[2]]
+(true.index <- sim.data[[3]])
+
+true.beta <- sim.data[[4]]
+```
+
++ By default, the two-stage algorithm is used in ProSGPV. 
++ `pro.sgpv` function takes inputs of explanatory variables x, outcome y, outcome type family (default is “gaussian”), stage indicator (default is 2), and a GVIF indicator (default is FALSE). 
++ A print method is available to show labels of the variables selected by ProSGPV.
+
+```{r}
+sgpv.out.2 <- pro.sgpv(x,y)
+sgpv.out.2
+
+# true.beta
+true.index
+```
+
++  Visualization of variable selection process
+
+```{r}
+plot(sgpv.out.2)
+```
+
+Model Summary
+
+```{r}
+summary(sgpv.out.2)
+```
+
++ `coef` function can be used to extract the coefficient estimates of length p. When signals are sparse, some of estimates are zero. A comparison shows that the estimates are close to the true effect sizes in the simulation.
+
+```{r}
+beta.hat = coef(sgpv.out.2)
+rbind(beta.hat, true.beta)
+```
+
++ `predict` function can be used to predict outcomes using the selected model. 
++ In-sample prediction can be made by calling `predict(sgpv.out.2)` and out-of-sample prediction can be made by feeding new data set into the newdata argument.
+
+```{r}
+preds = predict(sgpv.out.2)
+
+cbind(preds, y)
+```
+
+In addition to the two-stage algorithm, one-stage algorithm can also be used to select variables when n > p. The computation time is shorter for the one-stage algorithm at the expense of slightly reduced support recovery rate in the limit.
+
+```{r}
+sgpv.out.1 <- pro.sgpv(x,y,stage=1)
+sgpv.out.1
+```
+
+The one-stage algorithm missed V4 and only selected three variables. What happened?
+
+```{r}
+plot(sgpv.out.1)
+```
+
+### ProSGPV Real Life Example
+
+We can load the Tehran Housing data `t.housing` stored in the package.
+
+A dataset containing Tehran housing data. The data set has 372 observations. There are 26 explanatory variables at baseline, including 7 project physical and financial features (V2-V8) and 19 economic variables and indices (V11-V29). The outcome (V9) is the sales price of a real estate single-family residential apartment.
+
+```{r}
+set.seed(999)
+
+# prepare the data
+x = t.housing[,-ncol(t.housing)]
+y = t.housing$V9
+
+# run ProSGPV
+out.sgpv.2 <- pro.sgpv(x = x, y = y)
+```
+
+The two-stage algorithm selects the following variables.
+
+```{r}
+out.sgpv.2
+```
+
++ V9: Actual sales price (outcome)
++ V8: Price of the unit at the beginning of the project per square meter
++ V12: Building services index for preselected base year
++ V13: Wholesale price index of building materials for the base year
++ V15: Cumulative liquidity
++ V17: Land price index for the base year
++ V26: CPI of housing, water, fuel & power in the base year
+
+We can view the summary of the final model.
+
+```{r}
+summary(out.sgpv.2)
+```
+
+Coefficient estimates can be extracted by use of coef.
+
+```{r}
+coef(out.sgpv.2)
+```
+
+In-sample prediction can be made using S3 method predict and an external sample can be provided to make out-of-sample prediction with an argument of newx in the predict function.
+
+```{r}
+head(predict(out.sgpv.2))
+```
+
+S3 method plot can be used to visualize the variable selection process.
+
+First, we plot the full solution path with point estimates and 95% confidence intervals. Note that the null region is in grey. The selected variables are colored blue on the y-axis. `lambda.max` controls the limit of the X-axis.
+
+```{r}
+plot(out.sgpv.2, lambda.max = 0.01)
+```
+
+Alternatively, we can plot the confidence bound that is closer to the null.
+
+```{r}
+plot(out.sgpv.2,lpv=1,lambda.max=0.01)
+```
+
+### Vignettes {-}
+
++ [Linear ProSGPV](https://cran.r-project.org/web/packages/ProSGPV/vignettes/linear-vignette.html )
+
++ [GLM and Cox ProSGPV](https://cran.r-project.org/web/packages/ProSGPV/vignettes/glm-cox-vignette.html)
