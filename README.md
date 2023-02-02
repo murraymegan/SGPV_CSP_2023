@@ -3,7 +3,9 @@
 ## An Introduction to Second-generation p-values and their Use in Statistical Practice
 
 Instructors:
+    
     + Jeffrey D. Blume, Associate Dean and Professor in the School of Data Science at University of Virginia
+    
     + Megan H. Murray, Statistician at Eli Lilly and Company
 
 Description:
